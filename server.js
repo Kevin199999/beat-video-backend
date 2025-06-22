@@ -1,35 +1,57 @@
 // server.js
+
 const express = require("express");
 const multer = require("multer");
+const cors = require("cors");
 const path = require("path");
 const fs = require("fs");
 const { exec } = require("child_process");
-const cors = require("cors");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
 
 app.use(cors());
+app.use("/renders", express.static(path.join(__dirname, "renders")));
 
-const upload = multer({ dest: "uploads/" });
+// File upload settings
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const uploadPath = path.join(__dirname, "uploads");
+    if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath);
+    cb(null, uploadPath);
+  },
+  filename: function (req, file, cb) {
+    cb(null, Date.now() + "-" + file.originalname);
+  }
+});
 
-app.post("/api/render", upload.fields([{ name: "audio" }, { name: "image" }]), async (req, res) => {
+const upload = multer({ storage: storage });
+
+app.post("/api/render", upload.fields([
+  { name: "audio", maxCount: 1 },
+  { name: "image", maxCount: 1 }
+]), (req, res) => {
+  if (!req.files.audio || !req.files.image) {
+    return res.status(400).json({ error: "Audio and image files are required." });
+  }
+
   const audioPath = req.files.audio[0].path;
   const imagePath = req.files.image[0].path;
-  const outputPath = `renders/${Date.now()}_output.mp4`;
+  const outputFilename = `output-${Date.now()}.mp4`;
+  const outputPath = path.join(__dirname, "renders", outputFilename);
 
-  const command = `ffmpeg -loop 1 -i ${imagePath} -i ${audioPath} -c:v libx264 -tune stillimage -c:a aac -b:a 192k -pix_fmt yuv420p -shortest -vf "fade=t=in:st=0:d=1,fade=t=out:st=5:d=1" -y ${outputPath}`;
+  const command = `ffmpeg -loop 1 -i "${imagePath}" -i "${audioPath}" -shortest -c:v libx264 -c:a aac -b:a 192k -pix_fmt yuv420p -vf "fade=in:0:30" "${outputPath}"`;
 
   exec(command, (error, stdout, stderr) => {
     if (error) {
-      console.error("FFmpeg Error:", error);
+      console.error("FFmpeg error:", stderr);
       return res.status(500).json({ error: "Video rendering failed." });
     }
-    res.json({ videoUrl: `https://your-domain.com/${outputPath}` });
+
+    const videoUrl = `${req.protocol}://${req.get("host")}/renders/${outputFilename}`;
+    res.json({ videoUrl });
   });
 });
-
-app.use("/renders", express.static(path.join(__dirname, "renders")));
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
